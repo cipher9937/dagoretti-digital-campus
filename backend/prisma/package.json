@@ -1,0 +1,24 @@
+{
+  "name": "dagoretti-prisma",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "deploy": "prisma migrate deploy",
+    "seed": "tsx seed/seed.ts",
+    "studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.0",
+    "prisma": "^5.16.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  },
+  "prisma": {
+    "seed": "tsx seed/seed.ts"
+  }
+}
