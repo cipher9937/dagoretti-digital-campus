@@ -1,0 +1,37 @@
+{
+  "name": "dagoretti-high-school-digital-campus",
+  "version": "1.0.0",
+  "description": "Complete Digital Campus Platform for Dagoretti High School, Nairobi Kenya",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "start": "cd backend && npm start",
+    "db:generate": "cd prisma && npx prisma generate",
+    "db:migrate": "cd prisma && npx prisma migrate dev",
+    "db:seed": "cd prisma && npx prisma db seed",
+    "db:studio": "cd prisma && npx prisma studio",
+    "test": "npm run test:frontend && npm run test:backend",
+    "test:frontend": "cd frontend && npm test",
+    "test:backend": "cd backend && npm test",
+    "lint": "npm run lint:frontend && npm run lint:backend",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:backend": "cd backend && npm run lint",
+    "docker:build": "docker-compose -f docker/docker-compose.yml build",
+    "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
+    "docker:down": "docker-compose -f docker/docker-compose.yml down",
+    "zip": "zip -r dagoretti-high-school-digital-campus.zip . -x 'node_modules/*' '.next/*' 'dist/*' '*.zip'"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
