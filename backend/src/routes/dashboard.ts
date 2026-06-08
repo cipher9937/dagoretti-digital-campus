@@ -33,7 +33,12 @@ router.get('/admin', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req
 
     res.json({
       success: true,
-      data: { stats: { totalStudents, totalTeachers, totalClasses, activeAssignments }, todayAttendance, recentNews, upcomingEvents }
+      data: {
+        stats: { totalStudents, totalTeachers, totalClasses, activeAssignments },
+        todayAttendance,
+        recentNews,
+        upcomingEvents
+      }
     });
   } catch (error) { next(error); }
 });
@@ -82,4 +87,34 @@ router.get('/student', authenticate, authorize('STUDENT'), async (req: AuthReque
       }),
       prisma.onlineClass.findMany({
         where: { classId: student.classId, scheduledAt: { gte: new Date() } },
-        orderBy: { scheduledAt:
+        orderBy: { scheduledAt: 'asc' },
+        take: 5,
+        include: {
+          subject: { select: { name: true } },
+          teacher: { select: { firstName: true, lastName: true } }
+        }
+      }),
+      prisma.announcement.findMany({
+        where: {
+          OR: [
+            { target: 'ALL' },
+            { target: 'STUDENTS' },
+            { target: 'CLASS_SPECIFIC', classId: student.classId }
+          ],
+          isActive: true
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 5
+      }),
+      prisma.libraryItem.findMany({
+        where: { isPublic: true },
+        orderBy: { createdAt: 'desc' },
+        take: 4
+      })
+    ]);
+
+    res.json({ success: true, data: { student, pendingAssignments, upcomingClasses, announcements, recentLibrary } });
+  } catch (error) { next(error); }
+});
+
+export default router;
