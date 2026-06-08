@@ -1,137 +1,94 @@
-import { Router } from 'express';
-import { body, param } from 'express-validator';
+import { Router, Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcryptjs';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { AppError } from '../middleware/errorHandler';
+import { AppError } from '../utils/AppError';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { page = '1', limit = '20', departmentId, search } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
-
+    const { page = 1, limit = 20, search } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
     const where: any = {};
-    if (departmentId) where.departmentId = departmentId as string;
     if (search) {
       where.OR = [
-        { employeeNumber: { contains: search as string, mode: 'insensitive' } },
-        { user: { firstName: { contains: search as string, mode: 'insensitive' } } },
-        { user: { lastName: { contains: search as string, mode: 'insensitive' } } },
+        { firstName: { contains: search as string, mode: 'insensitive' } },
+        { lastName: { contains: search as string, mode: 'insensitive' } },
+        { staffNumber: { contains: search as string, mode: 'insensitive' } }
       ];
     }
-
     const [teachers, total] = await Promise.all([
       prisma.teacher.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { createdAt: 'desc' },
+        where, skip, take: Number(limit), orderBy: { firstName: 'asc' },
         include: {
-          user: { select: { id: true, email: true, firstName: true, lastName: true, avatar: true, status: true } },
           department: true,
-          classTeacherStream: { include: { class: true } },
-        },
+          user: { select: { email: true, isActive: true } },
+          subjectTeachers: { include: { subject: true } }
+        }
       }),
-      prisma.teacher.count({ where }),
+      prisma.teacher.count({ where })
     ]);
-
-    res.json({
-      success: true,
-      data: teachers,
-      pagination: { page: parseInt(page as string), limit: take, total, pages: Math.ceil(total / take) },
-    });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ success: true, data: teachers, pagination: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / Number(limit)) } });
+  } catch (error) { next(error); }
 });
 
-router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.get('/profile', authenticate, authorize('TEACHER'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
-
     const teacher = await prisma.teacher.findUnique({
-      where: { id },
-      include: {
-        user: { select: { id: true, email: true, firstName: true, lastName: true, avatar: true, phone: true, status: true } },
-        department: true,
-        classTeacherStream: { include: { class: true } },
-        subjectAssignments: { include: { subject: true } },
-      },
+      where: { userId: req.user!.id },
+      include: { department: true, user: { select: { email: true } }, subjectTeachers: { include: { subject: true } }, classTeacher: true }
     });
-
-    if (!teacher) {
-      throw new AppError('Teacher not found', 404);
-    }
-
-    if (req.user!.role === 'TEACHER' && req.user!.id !== teacher.userId) {
-      throw new AppError('Unauthorized', 403);
-    }
-
+    if (!teacher) throw new AppError('Teacher profile not found', 404);
     res.json({ success: true, data: teacher });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 8 }),
-    body('firstName').trim().isLength({ min: 2 }),
-    body('lastName').trim().isLength({ min: 2 }),
-    body('employeeNumber').trim().notEmpty(),
-    body('gender').isIn(['MALE', 'FEMALE', 'OTHER']),
-    body('departmentId').optional().isUUID(),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { email, password, firstName, lastName, employeeNumber, gender, departmentId, specialization, qualification } = req.body;
+router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: req.params.id },
+      include: { department: true, user: { select: { email: true } }, subjectTeachers: { include: { subject: true } } }
+    });
+    if (!teacher) throw new AppError('Teacher not found', 404);
+    res.json({ success: true, data: teacher });
+  } catch (error) { next(error); }
+});
 
-      const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser) {
-        throw new AppError('Email already registered', 409);
-      }
-
-      const existingEmployee = await prisma.teacher.findUnique({ where: { employeeNumber } });
-      if (existingEmployee) {
-        throw new AppError('Employee number already exists', 409);
-      }
-
-      const bcrypt = await import('bcryptjs');
-      const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS || '12'));
-
-      const teacher = await prisma.teacher.create({
-        data: {
-          user: {
-            create: {
-              email,
-              password: hashedPassword,
-              firstName,
-              lastName,
-              role: 'TEACHER',
-              status: 'ACTIVE',
-            },
-          },
-          employeeNumber,
-          gender,
-          departmentId,
-          specialization,
-          qualification,
-        },
-        include: {
-          user: { select: { id: true, email: true, firstName: true, lastName: true, status: true } },
-          department: true,
-        },
+router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password, firstName, lastName, phone, departmentId, bio, qualifications, staffNumber } = req.body;
+    const hashedPassword = await bcrypt.hash(password || 'DHS@Teacher2024', 12);
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({ data: { email, password: hashedPassword, role: 'TEACHER' } });
+      return tx.teacher.create({
+        data: { userId: user.id, firstName, lastName, staffNumber, phone, departmentId, bio, qualifications },
+        include: { department: true, user: { select: { email: true } } }
       });
+    });
+    res.status(201).json({ success: true, data: result });
+  } catch (error) { next(error); }
+});
 
-      res.status(201).json({ success: true, data: teacher });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+router.put('/:id', authenticate, authorize('ADMIN', 'SUPER_ADMIN', 'TEACHER'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const teacher = await prisma.teacher.update({
+      where: { id: req.params.id },
+      data: req.body,
+      include: { department: true }
+    });
+    res.json({ success: true, data: teacher });
+  } catch (error) { next(error); }
+});
 
-export { router as teacherRouter };
+router.post('/:id/assign-subject', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { subjectId, classId } = req.body;
+    const assignment = await prisma.subjectTeacher.create({
+      data: { teacherId: req.params.id, subjectId, classId }
+    });
+    res.status(201).json({ success: true, data: assignment });
+  } catch (error) { next(error); }
+});
+
+export default router;

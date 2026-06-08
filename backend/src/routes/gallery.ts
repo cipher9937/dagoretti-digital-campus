@@ -1,74 +1,56 @@
-import { Router } from 'express';
-import { body } from 'express-validator';
+import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, optionalAuth } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { AppError } from '../middleware/errorHandler';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', optionalAuth, async (req, res, next) => {
+router.get('/albums', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { page = '1', limit = '20', category, featured } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
-
-    const where: any = {};
-    if (category) where.category = category;
-    if (featured === 'true') where.isFeatured = true;
-
-    const [items, total] = await Promise.all([
-      prisma.gallery.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { createdAt: 'desc' },
-      }),
-      prisma.gallery.count({ where }),
-    ]);
-
-    res.json({
-      success: true,
-      data: items,
-      pagination: { page: parseInt(page as string), limit: take, total, pages: Math.ceil(total / take) },
+    const { category } = req.query;
+    const albums = await prisma.galleryAlbum.findMany({
+      where: { isPublic: true, ...(category ? { category: category as string } : {}) },
+      include: {
+        _count: { select: { items: true } },
+        items: { take: 1, orderBy: { order: 'asc' } }
+      },
+      orderBy: { createdAt: 'desc' }
     });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ success: true, data: albums });
+  } catch (error) { next(error); }
 });
 
-router.get('/:id', optionalAuth, async (req, res, next) => {
+router.get('/albums/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
-    const item = await prisma.gallery.findUnique({ where: { id } });
-
-    if (!item) {
-      throw new AppError('Gallery item not found', 404);
-    }
-
-    res.json({ success: true, data: item });
-  } catch (error) {
-    next(error);
-  }
+    const album = await prisma.galleryAlbum.findUnique({
+      where: { id: req.params.id },
+      include: { items: { orderBy: { order: 'asc' } } }
+    });
+    if (!album) return res.status(404).json({ success: false, error: 'Album not found' });
+    res.json({ success: true, data: album });
+  } catch (error) { next(error); }
 });
 
-router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('title').trim().notEmpty(),
-    body('category').trim().notEmpty(),
-    body('imageUrl').trim().isURL(),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const item = await prisma.gallery.create({
-        data: req.body,
-      });
+router.post('/albums', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const album = await prisma.galleryAlbum.create({ data: req.body });
+    res.status(201).json({ success: true, data: album });
+  } catch (error) { next(error); }
+});
 
-      res.status(201).json({ success: true, data: item });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+router.post('/albums/:id/items', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const item = await prisma.galleryItem.create({
+      data: { ...req.body, albumId: req.params.id }
+    });
+    res.status(201).json({ success: true, data: item });
+  } catch (error) { next(error); }
+});
 
-export { router as galleryRouter };
+router.delete('/albums/:id', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    await prisma.galleryAlbum.delete({ where: { id: req.params.id } });
+    res.json({ success: true, message: 'Album deleted' });
+  } catch (error) { next(error); }
+});
+
+export default router;

@@ -1,40 +1,37 @@
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '../utils/logger';
-
-export class AppError extends Error {
-  statusCode: number;
-  isOperational: boolean;
-
-  constructor(message: string, statusCode: number = 500) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = true;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
+import { AppError } from '../utils/AppError';
 
 export const errorHandler = (
-  err: Error | AppError,
+  err: Error,
   req: Request,
   res: Response,
-  _next: NextFunction
+  next: NextFunction
 ) => {
   if (err instanceof AppError) {
-    logger.warn(`Operational error: ${err.message}`);
     return res.status(err.statusCode).json({
       success: false,
-      message: err.message,
-      ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+      error: err.message,
     });
   }
 
-  logger.error(`Unexpected error: ${err.message}`, { stack: err.stack });
+  if ((err as any).code === 'P2002') {
+    return res.status(409).json({
+      success: false,
+      error: 'A record with this information already exists.',
+    });
+  }
+
+  if ((err as any).code === 'P2025') {
+    return res.status(404).json({
+      success: false,
+      error: 'Record not found.',
+    });
+  }
+
+  console.error('Unhandled error:', err);
 
   res.status(500).json({
     success: false,
-    message: process.env.NODE_ENV === 'production' 
-      ? 'Something went wrong. Please try again later.' 
-      : err.message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    error: 'Internal server error',
   });
 };

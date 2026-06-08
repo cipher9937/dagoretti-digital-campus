@@ -1,79 +1,71 @@
-import { Router } from 'express';
-import { body } from 'express-validator';
+import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { AppError } from '../middleware/errorHandler';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { status, subjectId, upcoming, page = '1', limit = '20' } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
-
+    const { upcoming, classId, subjectId } = req.query;
     const where: any = {};
-    if (status) where.status = status;
-    if (subjectId) where.subjectId = subjectId as string;
-    if (upcoming === 'true') {
-      where.scheduledAt = { gte: new Date() };
-    }
+    if (upcoming === 'true') where.scheduledAt = { gte: new Date() };
+    if (classId) where.classId = classId;
+    if (subjectId) where.subjectId = subjectId;
 
+    if (req.user!.role === 'STUDENT') {
+      const student = await prisma.student.findUnique({ where: { userId: req.user!.id } });
+      if (student) where.classId = student.classId;
+    }
     if (req.user!.role === 'TEACHER') {
       const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
       if (teacher) where.teacherId = teacher.id;
     }
 
-    const [classes, total] = await Promise.all([
-      prisma.onlineClass.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { scheduledAt: 'asc' },
-        include: {
-          subject: { select: { name: true, code: true } },
-        },
-      }),
-      prisma.onlineClass.count({ where }),
-    ]);
-
-    res.json({
-      success: true,
-      data: classes,
-      pagination: { page: parseInt(page as string), limit: take, total, pages: Math.ceil(total / take) },
+    const classes = await prisma.onlineClass.findMany({
+      where,
+      include: {
+        teacher: { select: { firstName: true, lastName: true } },
+        subject: { select: { name: true } },
+        class: { select: { name: true } }
+      },
+      orderBy: { scheduledAt: 'asc' }
     });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ success: true, data: classes });
+  } catch (error) { next(error); }
 });
 
-router.post('/', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('title').trim().notEmpty(),
-    body('subjectId').isUUID(),
-    body('meetLink').trim().isURL(),
-    body('scheduledAt').isISO8601(),
-    body('duration').optional().isInt({ min: 15, max: 300 }),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
-      const onlineClass = await prisma.onlineClass.create({
-        data: {
-          ...req.body,
-          teacherId: teacher?.id || req.body.teacherId,
-        },
-        include: {
-          subject: { select: { name: true } },
-        },
-      });
+router.post('/', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
+    const onlineClass = await prisma.onlineClass.create({
+      data: {
+        ...req.body,
+        teacherId: teacher?.id || req.body.teacherId,
+        scheduledAt: new Date(req.body.scheduledAt)
+      }
+    });
+    res.status(201).json({ success: true, data: onlineClass });
+  } catch (error) { next(error); }
+});
 
-      res.status(201).json({ success: true, data: onlineClass });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+router.put('/:id', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const onlineClass = await prisma.onlineClass.update({
+      where: { id: req.params.id },
+      data: {
+        ...req.body,
+        ...(req.body.scheduledAt && { scheduledAt: new Date(req.body.scheduledAt) })
+      }
+    });
+    res.json({ success: true, data: onlineClass });
+  } catch (error) { next(error); }
+});
 
-export { router as onlineClassRouter };
+router.delete('/:id', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    await prisma.onlineClass.delete({ where: { id: req.params.id } });
+    res.json({ success: true, message: 'Online class deleted' });
+  } catch (error) { next(error); }
+});
+
+export default router;

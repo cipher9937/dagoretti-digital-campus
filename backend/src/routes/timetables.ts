@@ -1,71 +1,75 @@
-import { Router } from 'express';
-import { body } from 'express-validator';
+import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.get('/class/:classId', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { classId, teacherId, dayOfWeek, term, academicYear } = req.query;
-
-    const where: any = {};
-    if (classId) where.classId = classId as string;
-    if (teacherId) where.teacherId = teacherId as string;
-    if (dayOfWeek !== undefined) where.dayOfWeek = parseInt(dayOfWeek as string);
-    if (term) where.term = parseInt(term as string);
-    if (academicYear) where.academicYear = parseInt(academicYear as string);
-
-    if (req.user!.role === 'STUDENT') {
-      const student = await prisma.student.findUnique({ where: { userId: req.user!.id } });
-      if (student?.stream?.classId) {
-        where.classId = student.stream.classId;
-      }
-    } else if (req.user!.role === 'TEACHER') {
-      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
-      if (teacher) where.teacherId = teacher.id;
-    }
-
     const timetables = await prisma.timetable.findMany({
-      where,
-      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+      where: { classId: req.params.classId },
       include: {
-        class: { select: { name: true } },
         subject: { select: { name: true, code: true } },
+        class: { select: { name: true } }
       },
+      orderBy: [{ day: 'asc' }, { startTime: 'asc' }]
     });
-
     res.json({ success: true, data: timetables });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('classId').isUUID(),
-    body('subjectId').isUUID(),
-    body('teacherId').isUUID(),
-    body('dayOfWeek').isInt({ min: 0, max: 6 }),
-    body('startTime').matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
-    body('endTime').matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const timetable = await prisma.timetable.create({
-        data: req.body,
-        include: {
-          class: { select: { name: true } },
-          subject: { select: { name: true } },
-        },
+router.get('/my', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (req.user!.role === 'STUDENT') {
+      const student = await prisma.student.findUnique({ where: { userId: req.user!.id } });
+      if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+      const timetables = await prisma.timetable.findMany({
+        where: { classId: student.classId },
+        include: { subject: true, class: true },
+        orderBy: [{ day: 'asc' }, { startTime: 'asc' }]
       });
-
-      res.status(201).json({ success: true, data: timetable });
-    } catch (error) {
-      next(error);
+      return res.json({ success: true, data: timetables });
     }
-  }
-);
+    if (req.user!.role === 'TEACHER') {
+      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
+      if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+      const subjects = await prisma.subjectTeacher.findMany({
+        where: { teacherId: teacher.id },
+        select: { subjectId: true }
+      });
+      const timetables = await prisma.timetable.findMany({
+        where: { subjectId: { in: subjects.map(s => s.subjectId) } },
+        include: { subject: true, class: true },
+        orderBy: [{ day: 'asc' }, { startTime: 'asc' }]
+      });
+      return res.json({ success: true, data: timetables });
+    }
+    res.json({ success: true, data: [] });
+  } catch (error) { next(error); }
+});
 
-export { router as timetableRouter };
+router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const timetable = await prisma.timetable.create({ data: req.body });
+    res.status(201).json({ success: true, data: timetable });
+  } catch (error) { next(error); }
+});
+
+router.put('/:id', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const timetable = await prisma.timetable.update({
+      where: { id: req.params.id },
+      data: req.body
+    });
+    res.json({ success: true, data: timetable });
+  } catch (error) { next(error); }
+});
+
+router.delete('/:id', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    await prisma.timetable.delete({ where: { id: req.params.id } });
+    res.json({ success: true, message: 'Timetable entry deleted' });
+  } catch (error) { next(error); }
+});
+
+export default router;

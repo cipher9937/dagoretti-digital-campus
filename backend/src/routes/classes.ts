@@ -1,62 +1,48 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { AppError } from '../middleware/errorHandler';
+import { authenticate, authorize } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const classes = await prisma.class.findMany({
+      where: { isActive: true },
       include: {
-        streams: {
-          include: {
-            classTeacher: {
-              include: { user: { select: { firstName: true, lastName: true } } },
-            },
-            _count: { select: { students: true } },
-          },
-        },
-        subjects: { select: { id: true, name: true, code: true } },
+        classTeacher: { select: { firstName: true, lastName: true } },
+        _count: { select: { students: true } }
       },
-      orderBy: { year: 'desc' },
+      orderBy: { name: 'asc' }
     });
-
     res.json({ success: true, data: classes });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.get('/:id', authenticate, async (req, res, next) => {
+router.post('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
-    const classData = await prisma.class.findUnique({
-      where: { id },
-      include: {
-        streams: {
-          include: {
-            classTeacher: { include: { user: { select: { firstName: true, lastName: true } } } },
-            students: {
-              include: { user: { select: { firstName: true, lastName: true, email: true } } },
-            },
-          },
-        },
-        subjects: true,
-        timetables: {
-          include: { subject: { select: { name: true } } },
-        },
-      },
+    const cls = await prisma.class.create({
+      data: req.body,
+      include: { classTeacher: true }
     });
-
-    if (!classData) {
-      throw new AppError('Class not found', 404);
-    }
-
-    res.json({ success: true, data: classData });
-  } catch (error) {
-    next(error);
-  }
+    res.status(201).json({ success: true, data: cls });
+  } catch (error) { next(error); }
 });
 
-export { router as classRouter };
+router.put('/:id', authenticate, authorize('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const cls = await prisma.class.update({
+      where: { id: req.params.id },
+      data: req.body
+    });
+    res.json({ success: true, data: cls });
+  } catch (error) { next(error); }
+});
+
+router.delete('/:id', authenticate, authorize('SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await prisma.class.delete({ where: { id: req.params.id } });
+    res.json({ success: true, message: 'Class deleted' });
+  } catch (error) { next(error); }
+});
+
+export default router;

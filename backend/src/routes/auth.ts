@@ -1,247 +1,106 @@
-import { Router } from 'express';
-import { body } from 'express-validator';
+import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../utils/prisma';
-import { generateTokens, verifyRefreshToken, verifyAccessToken } from '../utils/jwt';
-import { AppError } from '../middleware/errorHandler';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { logger } from '../utils/logger';
+import { AppError } from '../utils/AppError';
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
+import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.post('/register', 
-  validate([
-    body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/),
-    body('firstName').trim().isLength({ min: 2 }),
-    body('lastName').trim().isLength({ min: 2 }),
-    body('role').optional().isIn(['STUDENT', 'TEACHER', 'ADMIN']),
-  ]),
-  async (req, res, next) => {
-    try {
-      const { email, password, firstName, lastName, role = 'STUDENT' } = req.body;
+router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) throw new AppError('Email and password required', 400);
 
-      const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser) {
-        throw new AppError('Email already registered', 409);
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: {
+        student: { include: { class: { select: { name: true, level: true } } } },
+        teacher: { select: { id: true, firstName: true, lastName: true, staffNumber: true, photoUrl: true, departmentId: true } },
+        admin: { select: { id: true, firstName: true, lastName: true, photoUrl: true } }
       }
+    });
 
-      const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS || '12'));
+    if (!user || !user.isActive) throw new AppError('Invalid credentials', 401);
 
-      const user = await prisma.user.create({
-        data: {
-          email,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          role,
-          status: 'PENDING',
-        },
-        select: { id: true, email: true, firstName: true, lastName: true, role: true, status: true },
-      });
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) throw new AppError('Invalid credentials', 401);
 
-      logger.info(`New user registered: ${email}`);
-      res.status(201).json({ success: true, message: 'Registration successful. Awaiting admin approval.', data: user });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+    const tokenPayload = { userId: user.id, email: user.email, role: user.role };
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
 
-router.post('/login',
-  validate([
-    body('email').isEmail().normalizeEmail(),
-    body('password').notEmpty(),
-  ]),
-  async (req, res, next) => {
-    try {
-      const { email, password } = req.body;
-
-      const user = await prisma.user.findUnique({
-        where: { email },
-        include: { student: true, teacher: true, admin: true },
-      });
-
-      if (!user) {
-        throw new AppError('Invalid credentials', 401);
-      }
-
-      if (user.status === 'SUSPENDED') {
-        throw new AppError('Account suspended. Contact administration.', 403);
-      }
-
-      if (user.status === 'INACTIVE') {
-        throw new AppError('Account inactive. Contact administration.', 403);
-      }
-
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        throw new AppError('Invalid credentials', 401);
-      }
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { lastLogin: new Date() },
-      });
-
-      const tokens = generateTokens({
+    await prisma.refreshToken.create({
+      data: {
+        token: refreshToken,
         userId: user.id,
-        email: user.email,
-        role: user.role,
-      });
-
-      await prisma.session.create({
-        data: {
-          userId: user.id,
-          token: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          ipAddress: req.ip,
-          userAgent: req.headers['user-agent'],
-        },
-      });
-
-      res.cookie('refreshToken', tokens.refreshToken, {
-        httpOnly: true,
-        secure: process.env.COOKIE_SECURE === 'true',
-        sameSite: process.env.COOKIE_SAME_SITE as 'strict' | 'lax' | 'none' || 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      logger.info(`User logged in: ${email}`);
-      res.json({
-        success: true,
-        data: {
-          user: {
-            id: user.id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            role: user.role,
-            avatar: user.avatar,
-            student: user.student,
-            teacher: user.teacher,
-          },
-          accessToken: tokens.accessToken,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-router.post('/refresh', async (req, res, next) => {
-  try {
-    const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
-
-    if (!refreshToken) {
-      throw new AppError('Refresh token required', 401);
-    }
-
-    const decoded = verifyRefreshToken(refreshToken);
-    const session = await prisma.session.findUnique({
-      where: { refreshToken },
-      include: { user: true },
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      }
     });
 
-    if (!session || session.expiresAt < new Date()) {
-      throw new AppError('Invalid or expired refresh token', 401);
-    }
+    await prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
 
-    const tokens = generateTokens({
-      userId: session.user.id,
-      email: session.user.email,
-      role: session.user.role,
+    const profile = user.student || user.teacher || user.admin;
+
+    res.json({
+      success: true,
+      data: { accessToken, refreshToken, user: { id: user.id, email: user.email, role: user.role, profile } }
     });
-
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { token: tokens.accessToken, refreshToken: tokens.refreshToken },
-    });
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.COOKIE_SECURE === 'true',
-      sameSite: process.env.COOKIE_SAME_SITE as 'strict' | 'lax' | 'none' || 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    res.json({ success: true, data: { accessToken: tokens.accessToken } });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/logout', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.post('/refresh-token', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
+    const { refreshToken } = req.body;
+    if (!refreshToken) throw new AppError('Refresh token required', 400);
 
-    if (token) {
-      await prisma.session.deleteMany({ where: { token } });
-    }
+    const stored = await prisma.refreshToken.findUnique({ where: { token: refreshToken } });
+    if (!stored || stored.expiresAt < new Date()) throw new AppError('Invalid or expired refresh token', 401);
 
-    res.clearCookie('refreshToken');
-    logger.info(`User logged out: ${req.user?.email}`);
+    const payload = verifyRefreshToken(refreshToken);
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user || !user.isActive) throw new AppError('User not found', 401);
+
+    const newAccessToken = generateAccessToken({ userId: user.id, email: user.email, role: user.role });
+    res.json({ success: true, data: { accessToken: newAccessToken } });
+  } catch (error) { next(error); }
+});
+
+router.post('/logout', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { refreshToken } = req.body;
+    if (refreshToken) await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
     res.json({ success: true, message: 'Logged out successfully' });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.get('/me', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.get('/me', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user!.id },
-      include: { student: { include: { stream: { include: { class: true } } } }, teacher: { include: { department: true } }, admin: true },
-      select: {
-        id: true, email: true, firstName: true, lastName: true, role: true,
-        avatar: true, status: true, lastLogin: true, createdAt: true,
-        student: true, teacher: true, admin: true,
-      },
+      include: {
+        student: { include: { class: true } },
+        teacher: { include: { department: true, subjectTeachers: { include: { subject: true } } } },
+        admin: true
+      }
     });
-
-    if (!user) {
-      throw new AppError('User not found', 404);
-    }
-
-    res.json({ success: true, data: user });
-  } catch (error) {
-    next(error);
-  }
+    if (!user) throw new AppError('User not found', 404);
+    const { password, ...userWithoutPassword } = user;
+    res.json({ success: true, data: userWithoutPassword });
+  } catch (error) { next(error); }
 });
 
-router.patch('/change-password', authenticate,
-  validate([
-    body('currentPassword').notEmpty(),
-    body('newPassword').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { currentPassword, newPassword } = req.body;
-      const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+router.patch('/change-password', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) throw new AppError('User not found', 404);
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) throw new AppError('Current password is incorrect', 400);
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (error) { next(error); }
+});
 
-      if (!user) {
-        throw new AppError('User not found', 404);
-      }
-
-      const isValid = await bcrypt.compare(currentPassword, user.password);
-      if (!isValid) {
-        throw new AppError('Current password is incorrect', 400);
-      }
-
-      const hashedPassword = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS || '12'));
-      await prisma.user.update({ where: { id: user.id }, data: { password: hashedPassword } });
-
-      await prisma.session.deleteMany({ where: { userId: user.id } });
-      res.clearCookie('refreshToken');
-
-      res.json({ success: true, message: 'Password changed successfully. Please log in again.' });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-export { router as authRouter };
+export default router;

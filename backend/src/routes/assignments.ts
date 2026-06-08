@@ -1,201 +1,92 @@
-import { Router } from 'express';
-import { body, param } from 'express-validator';
+import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { AppError } from '../middleware/errorHandler';
+import { AppError } from '../utils/AppError';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
+router.get('/', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { page = '1', limit = '20', subjectId, status, gradeLevel } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
-
+    const { subjectId, classId, status, page = 1, limit = 20 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
     const where: any = {};
-    if (subjectId) where.subjectId = subjectId as string;
-    if (status) where.status = status as string;
-    if (gradeLevel) {
-      where.subject = { gradeLevel: { has: gradeLevel as string } };
-    }
 
+    if (req.user!.role === 'TEACHER') {
+      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
+      if (teacher) where.teacherId = teacher.id;
+    }
     if (req.user!.role === 'STUDENT') {
       const student = await prisma.student.findUnique({ where: { userId: req.user!.id } });
-      if (student) {
-        where.subject = { gradeLevel: { has: student.gradeLevel } };
-      }
-    } else if (req.user!.role === 'TEACHER') {
-      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
-      if (teacher) {
-        where.teacherId = teacher.id;
-      }
+      if (student) where.classId = student.classId;
+      where.status = 'PUBLISHED';
     }
+    if (subjectId) where.subjectId = subjectId;
+    if (classId) where.classId = classId;
+    if (status) where.status = status;
 
     const [assignments, total] = await Promise.all([
       prisma.assignment.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { dueDate: 'asc' },
+        where, skip, take: Number(limit), orderBy: { dueDate: 'asc' },
         include: {
           subject: { select: { name: true, code: true } },
-          _count: { select: { submissions: true } },
-        },
+          teacher: { select: { firstName: true, lastName: true } },
+          _count: { select: { submissions: true } }
+        }
       }),
-      prisma.assignment.count({ where }),
+      prisma.assignment.count({ where })
     ]);
 
-    res.json({
-      success: true,
-      data: assignments,
-      pagination: { page: parseInt(page as string), limit: take, total, pages: Math.ceil(total / take) },
-    });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ success: true, data: assignments, pagination: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / Number(limit)) } });
+  } catch (error) { next(error); }
 });
 
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
     const assignment = await prisma.assignment.findUnique({
-      where: { id },
+      where: { id: req.params.id },
       include: {
         subject: true,
-        submissions: {
-          include: {
-            student: {
-              include: { user: { select: { firstName: true, lastName: true } } },
-            },
-          },
-        },
-      },
+        teacher: { select: { firstName: true, lastName: true } },
+        submissions: req.user!.role !== 'STUDENT' ? {
+          include: { student: { select: { firstName: true, lastName: true, admissionNumber: true } } }
+        } : false
+      }
     });
-
-    if (!assignment) {
-      throw new AppError('Assignment not found', 404);
-    }
-
+    if (!assignment) throw new AppError('Assignment not found', 404);
     res.json({ success: true, data: assignment });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('title').trim().notEmpty(),
-    body('description').optional().trim(),
-    body('subjectId').isUUID(),
-    body('type').isIn(['HOMEWORK', 'CLASSWORK', 'PROJECT', 'QUIZ', 'EXAM', 'LAB_REPORT']),
-    body('dueDate').isISO8601(),
-    body('maxScore').optional().isInt({ min: 1, max: 100 }),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
-      const teacherId = teacher?.id;
+router.post('/', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
+    const assignment = await prisma.assignment.create({
+      data: {
+        ...req.body,
+        teacherId: teacher?.id || req.body.teacherId,
+        dueDate: new Date(req.body.dueDate)
+      },
+      include: { subject: true }
+    });
+    res.status(201).json({ success: true, data: assignment });
+  } catch (error) { next(error); }
+});
 
-      const assignment = await prisma.assignment.create({
-        data: {
-          ...req.body,
-          teacherId: teacherId || req.body.teacherId,
-        },
-        include: { subject: { select: { name: true } } },
-      });
+router.put('/:id', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const assignment = await prisma.assignment.update({
+      where: { id: req.params.id },
+      data: { ...req.body, ...(req.body.dueDate && { dueDate: new Date(req.body.dueDate) }) }
+    });
+    res.json({ success: true, data: assignment });
+  } catch (error) { next(error); }
+});
 
-      res.status(201).json({ success: true, data: assignment });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+router.delete('/:id', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await prisma.assignment.delete({ where: { id: req.params.id } });
+    res.json({ success: true, message: 'Assignment deleted' });
+  } catch (error) { next(error); }
+});
 
-router.post('/:id/submit', authenticate, authorize('STUDENT'),
-  validate([
-    param('id').isUUID(),
-    body('content').optional().trim(),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = req.params;
-      const { content, attachments } = req.body;
-
-      const student = await prisma.student.findUnique({ where: { userId: req.user!.id } });
-      if (!student) {
-        throw new AppError('Student profile not found', 404);
-      }
-
-      const assignment = await prisma.assignment.findUnique({ where: { id } });
-      if (!assignment) {
-        throw new AppError('Assignment not found', 404);
-      }
-
-      const isLate = new Date() > new Date(assignment.dueDate);
-
-      const submission = await prisma.submission.upsert({
-        where: {
-          assignmentId_studentId: {
-            assignmentId: id,
-            studentId: student.id,
-          },
-        },
-        update: {
-          content,
-          attachments,
-          status: isLate ? 'LATE' : 'SUBMITTED',
-          submittedAt: new Date(),
-        },
-        create: {
-          assignmentId: id,
-          studentId: student.id,
-          content,
-          attachments,
-          status: isLate ? 'LATE' : 'SUBMITTED',
-        },
-      });
-
-      res.json({ success: true, data: submission });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-router.patch('/:id/grade', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'),
-  validate([
-    param('id').isUUID(),
-    body('studentId').isUUID(),
-    body('score').isInt({ min: 0, max: 100 }),
-    body('feedback').optional().trim(),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { id } = req.params;
-      const { studentId, score, feedback } = req.body;
-
-      const submission = await prisma.submission.update({
-        where: {
-          assignmentId_studentId: {
-            assignmentId: id,
-            studentId,
-          },
-        },
-        data: {
-          score,
-          feedback,
-          status: 'GRADED',
-          gradedAt: new Date(),
-          gradedBy: req.user!.id,
-        },
-      });
-
-      res.json({ success: true, data: submission });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-export { router as assignmentRouter };
+export default router;

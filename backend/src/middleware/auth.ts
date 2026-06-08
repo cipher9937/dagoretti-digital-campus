@@ -1,88 +1,54 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken, TokenPayload } from '../utils/jwt';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../utils/prisma';
-import { AppError } from './errorHandler';
+import { AppError } from '../utils/AppError';
 
-export interface AuthenticatedRequest extends Request {
-  user?: TokenPayload & { id: string; role: string };
+export interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    role: string;
+  };
 }
 
-export const authenticate = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-) => {
+export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
-
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new AppError('Access token required', 401);
+      throw new AppError('No token provided', 401);
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = verifyAccessToken(token);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, role: true, status: true },
+      select: { id: true, email: true, role: true, isActive: true }
     });
 
-    if (!user) {
-      throw new AppError('User not found', 401);
+    if (!user || !user.isActive) {
+      throw new AppError('User not found or inactive', 401);
     }
 
-    if (user.status === 'SUSPENDED' || user.status === 'INACTIVE') {
-      throw new AppError('Account is not active', 403);
-    }
-
-    req.user = { id: user.id, email: user.email, role: user.role, userId: user.id };
+    req.user = { id: user.id, email: user.email, role: user.role };
     next();
   } catch (error) {
-    if (error instanceof AppError) {
-      return res.status(error.statusCode).json({ success: false, message: error.message });
+    if (error instanceof jwt.JsonWebTokenError) {
+      next(new AppError('Invalid token', 401));
+    } else {
+      next(error);
     }
-    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 };
 
 export const authorize = (...roles: string[]) => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, message: 'Authentication required' });
+      return next(new AppError('Not authenticated', 401));
     }
-
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: 'Insufficient permissions' });
+      return next(new AppError('Not authorized', 403));
     }
-
     next();
   };
-};
-
-export const optionalAuth = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-) => {
-  try {
-    const authHeader = req.headers.authorization;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const decoded = verifyAccessToken(token);
-
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-        select: { id: true, email: true, role: true },
-      });
-
-      if (user) {
-        req.user = { id: user.id, email: user.email, role: user.role, userId: user.id };
-      }
-    }
-
-    next();
-  } catch {
-    next();
-  }
 };

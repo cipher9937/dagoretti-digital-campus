@@ -1,96 +1,62 @@
-import { Router } from 'express';
-import { body } from 'express-validator';
+import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../utils/prisma';
-import { authenticate, authorize, AuthenticatedRequest } from '../middleware/auth';
-import { validate } from '../middleware/validation';
-import { AppError } from '../middleware/errorHandler';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', authenticate, authorize('ADMIN', 'SUPER_ADMIN', 'TEACHER'), async (req, res, next) => {
+router.get('/', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { date, streamId, studentId, page = '1', limit = '50' } = req.query;
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
-    const take = parseInt(limit as string);
-
+    const { classId, date, studentId } = req.query;
     const where: any = {};
-    if (date) where.date = new Date(date as string);
-    if (streamId) where.student = { streamId: streamId as string };
-    if (studentId) where.studentId = studentId as string;
-
-    const [attendance, total] = await Promise.all([
-      prisma.attendance.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { date: 'desc' },
-        include: {
-          student: {
-            include: {
-              user: { select: { firstName: true, lastName: true } },
-              stream: { include: { class: true } },
-            },
-          },
-        },
-      }),
-      prisma.attendance.count({ where }),
-    ]);
-
-    res.json({
-      success: true,
-      data: attendance,
-      pagination: { page: parseInt(page as string), limit: take, total, pages: Math.ceil(total / take) },
+    if (classId) where.classId = classId;
+    if (studentId) where.studentId = studentId;
+    if (date) {
+      const d = new Date(date as string);
+      where.date = {
+        gte: new Date(d.setHours(0, 0, 0, 0)),
+        lt: new Date(d.setHours(23, 59, 59, 999))
+      };
+    }
+    const records = await prisma.attendance.findMany({
+      where,
+      include: { student: { select: { firstName: true, lastName: true, admissionNumber: true } } },
+      orderBy: { date: 'desc' }
     });
-  } catch (error) {
-    next(error);
-  }
+    res.json({ success: true, data: records });
+  } catch (error) { next(error); }
 });
 
-router.post('/mark', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'),
-  validate([
-    body('records').isArray(),
-    body('records.*.studentId').isUUID(),
-    body('records.*.status').isIn(['PRESENT', 'ABSENT', 'LATE', 'EXCUSED', 'SICK']),
-    body('date').isISO8601(),
-  ]),
-  async (req: AuthenticatedRequest, res, next) => {
-    try {
-      const { records, date } = req.body;
-      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
-      const markedBy = teacher?.id || req.user!.id;
+router.post('/bulk', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const teacher = await prisma.teacher.findUnique({ where: { userId: req.user!.id } });
+    const { records, classId, date } = req.body;
+    const created = await prisma.$transaction(
+      records.map((r: any) =>
+        prisma.attendance.upsert({
+          where: { studentId_classId_date: { studentId: r.studentId, classId, date: new Date(date) } },
+          create: { studentId: r.studentId, classId, date: new Date(date), status: r.status, teacherId: teacher?.id || req.body.teacherId },
+          update: { status: r.status }
+        })
+      )
+    );
+    res.status(201).json({ success: true, data: created });
+  } catch (error) { next(error); }
+});
 
-      const created = await prisma.$transaction(
-        records.map((record: any) =>
-          prisma.attendance.upsert({
-            where: {
-              studentId_date_subjectId: {
-                studentId: record.studentId,
-                date: new Date(date),
-                subjectId: record.subjectId || null,
-              },
-            },
-            update: {
-              status: record.status,
-              notes: record.notes,
-              markedBy,
-            },
-            create: {
-              studentId: record.studentId,
-              date: new Date(date),
-              status: record.status,
-              subjectId: record.subjectId,
-              notes: record.notes,
-              markedBy,
-            },
-          })
-        )
-      );
-
-      res.json({ success: true, data: created });
-    } catch (error) {
-      next(error);
+router.get('/report/:classId', authenticate, authorize('TEACHER', 'ADMIN', 'SUPER_ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const where: any = { classId: req.params.classId };
+    if (startDate && endDate) {
+      where.date = { gte: new Date(startDate as string), lte: new Date(endDate as string) };
     }
-  }
-);
+    const records = await prisma.attendance.groupBy({
+      by: ['studentId', 'status'],
+      where,
+      _count: { status: true }
+    });
+    res.json({ success: true, data: records });
+  } catch (error) { next(error); }
+});
 
-export { router as attendanceRouter };
+export default router;
