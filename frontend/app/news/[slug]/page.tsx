@@ -1,32 +1,23 @@
-import { notFound } from 'next/navigation';
-import { NewsArticle } from '@/components/sections/news-article';
-import { RelatedNews } from '@/components/sections/related-news';
+import { Navbar } from '@/components/navbar';
+import { Footer } from '@/components/footer';
 
-async function getNews(slug: string) {
-  // In production, fetch from API
-  return {
-    title: 'News Article',
-    slug,
-    content: 'Content...',
-  };
-}
-
-export async function generateMetadata({ params }: { params: { slug: string } }) {
-  const news = await getNews(params.slug);
-  if (!news) return { title: 'Not Found' };
-  return {
-    title: `${news.title} | Dagoretti High School News`,
-  };
-}
-
-export default async function NewsDetailPage({ params }: { params: { slug: string } }) {
-  const news = await getNews(params.slug);
-  if (!news) notFound();
+export default async function NewsDetailPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
 
   return (
     <>
-      <NewsArticle news={news} />
-      <RelatedNews currentSlug={params.slug} />
+      <Navbar />
+      <main className="min-h-screen bg-gray-50 py-16">
+        <div className="container mx-auto px-4 max-w-4xl">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="p-8 md:p-10">
+              <h1 className="text-3xl font-bold text-gray-900 mb-4">News Article</h1>
+              <p className="text-gray-500">Article: {slug}</p>
+            </div>
+          </div>
+        </div>
+      </main>
+      <Footer />
     </>
   );
 }
