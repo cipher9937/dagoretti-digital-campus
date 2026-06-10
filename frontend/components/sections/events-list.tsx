@@ -1,60 +1,63 @@
-"use client"
+'use client';
 
-import { motion } from 'framer-motion';
-import { useInView } from 'react-intersection-observer';
-import { Calendar, CheckCircle } from 'lucide-react';
+import { Calendar, MapPin } from 'lucide-react';
 
 const pastEvents = [
   { title: 'KCSE 2023 Results Celebration', date: 'January 10, 2024', description: 'Celebrating outstanding KCSE results with students, parents, and staff.' },
   { title: 'Giants of Africa Court Launch', date: 'January 20, 2023', description: 'Official unveiling of the world-class basketball court donated by Giants of Africa.' },
-  { title: 'Alumni Reunion 2023', date: 'December 15, 2023', description: 'Annual gathering of former students to celebrate the school's legacy and contribute to development.' },
+  { title: 'Alumni Reunion 2023', date: 'December 15, 2023', description: 'Annual gathering of former students to celebrate the school legacy and contribute to development.' },
   { title: 'Science Congress 2023', date: 'August 20, 2023', description: 'Students showcased innovative projects at the regional Science Congress, winning multiple awards.' },
   { title: 'Sports Day 2023', date: 'June 18, 2023', description: 'Annual inter-house sports competition with outstanding performances in athletics and team sports.' },
   { title: 'Career Day 2023', date: 'July 22, 2023', description: 'University representatives and industry professionals engaged with Form 4 students on career paths.' },
 ];
 
+const upcomingEvents = [
+  { title: 'Term 2 Opening Day', date: 'May 6, 2024', location: 'Main School Ground', category: 'Academic' },
+  { title: 'Inter-House Athletics', date: 'May 25, 2024', location: 'School Ground', category: 'Sports' },
+  { title: 'Parent-Teacher Meeting', date: 'June 8, 2024', location: 'School Hall', category: 'Parents' },
+  { title: 'Mid-Term Examinations', date: 'June 17, 2024', location: 'All Classrooms', category: 'Academic' },
+];
+
 export function EventsList() {
-  const [ref, inView] = useInView({ triggerOnce: true, threshold: 0.1 });
-
   return (
-    <section className="section-padding bg-navy-50" ref={ref}>
-      <div className="container-padding mx-auto max-w-7xl">
-        <motion.div
-          initial={{ opacity: 0, y: 30 }}
-          animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ duration: 0.8 }}
-        >
-          <div className="mb-12">
-            <span className="text-gold-600 font-semibold text-sm uppercase tracking-wider">Past Events</span>
-            <h2 className="text-3xl font-bold text-navy-900 mt-2">Event History</h2>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-6">
-            {pastEvents.map((event, index) => (
-              <motion.div
-                key={event.title}
-                initial={{ opacity: 0, y: 30 }}
-                animate={inView ? { opacity: 1, y: 0 } : {}}
-                transition={{ duration: 0.5, delay: 0.1 + index * 0.1 }}
-                className="bg-white rounded-xl p-6 hover:shadow-lg transition-all duration-300"
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 bg-emerald-50 rounded-lg flex items-center justify-center shrink-0">
-                    <CheckCircle className="w-5 h-5 text-emerald-600" />
+    <section className="py-16 bg-white">
+      <div className="container mx-auto px-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+          {/* Upcoming */}
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Upcoming Events</h2>
+            <div className="space-y-4">
+              {upcomingEvents.map((event) => (
+                <div key={event.title} className="flex gap-4 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <div className="flex-shrink-0 w-12 h-12 bg-blue-900 text-white rounded-xl flex flex-col items-center justify-center text-xs font-bold">
+                    <Calendar className="w-5 h-5" />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Calendar className="w-4 h-4 text-navy-400" />
-                      <span className="text-sm text-navy-500">{event.date}</span>
+                    <h3 className="font-semibold text-gray-900">{event.title}</h3>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{event.date}</span>
+                      <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{event.location}</span>
                     </div>
-                    <h3 className="font-semibold text-navy-900 mb-2">{event.title}</h3>
-                    <p className="text-sm text-navy-600 leading-relaxed">{event.description}</p>
                   </div>
                 </div>
-              </motion.div>
-            ))}
+              ))}
+            </div>
           </div>
-        </motion.div>
+
+          {/* Past */}
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Past Events</h2>
+            <div className="space-y-3">
+              {pastEvents.map((event) => (
+                <div key={event.title} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <h3 className="font-semibold text-gray-900 text-sm">{event.title}</h3>
+                  <p className="text-xs text-blue-600 mt-0.5">{event.date}</p>
+                  <p className="text-xs text-gray-500 mt-1">{event.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
